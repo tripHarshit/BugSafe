@@ -1,0 +1,42 @@
+.app-container {
+  max-width: 400px;
+  margin: 60px auto;
+  padding: 32px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  font-family: Arial, sans-serif;
+}
+.input-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.pr-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 16px;
+}
+.submit-btn {
+  padding: 8px 18px;
+  background: #24292f;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.submit-btn:hover {
+  background: #444c56;
+}
+.result-area {
+  min-height: 60px;
+  border: 1px dashed #e1e4e8;
+  border-radius: 4px;
+  padding: 16px;
+  background: #fafbfc;
+  color: #333;
+}
