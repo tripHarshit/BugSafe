@@ -207,11 +207,10 @@ function App() {
   const [token, setToken] = useState('');
   const [aiApiKey, setAiApiKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [prData, setPrData] = useState(null);
   const [fileData, setFileData] = useState(null);
-  const [analysisProgress, setAnalysisProgress] = useState({});
+  const [analyzingFiles, setAnalyzingFiles] = useState({});
 
   const generateReportText = () => {
     if (!prData || !fileData) return '';
@@ -283,7 +282,7 @@ function App() {
     setErrorMessage('');
     setPrData(null);
     setFileData(null);
-    setAnalysisProgress({});
+    setAnalyzingFiles({});
 
     let parsed;
     try {
@@ -328,11 +327,6 @@ function App() {
       setPrData({ owner, repo, prNumber, details: data });
       setFileData(fileResponse);
 
-      // Auto-run AI analysis if API key is provided
-      if (aiApiKey.trim()) {
-        await runAllAnalyses(fileResponse.files, aiApiKey);
-      }
-
     } catch (err) {
       setErrorMessage(err.message || 'Failed to fetch PR');
     } finally {
@@ -340,53 +334,50 @@ function App() {
     }
   };
 
-  const runAllAnalyses = async (files, apiKey) => {
-    setIsAnalyzing(true);
-    setAnalysisProgress({});
+  const handleAnalyzeFile = async (fileIndex, analysisType) => {
+    if (!aiApiKey.trim()) {
+      setErrorMessage(`Please enter your ChatAnywhere API key to run ${analysisType} analysis`);
+      return;
+    }
 
+    const file = fileData.files[fileIndex];
+    if (!file.patch) {
+      setErrorMessage('No patch content available for analysis');
+      return;
+    }
+
+    setAnalyzingFiles(prev => ({ 
+      ...prev, 
+      [`${fileIndex}-${analysisType}`]: true 
+    }));
+    
     try {
-      const updatedFiles = [...files];
-      
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (!file.patch) continue;
-
-        setAnalysisProgress(prev => ({ 
-          ...prev, 
-          [i]: { codeQuality: 'running', security: 'running' } 
-        }));
-
-        // Run both analyses in parallel for each file
-        const [codeAnalysis, securityAnalysis] = await Promise.allSettled([
-          analyzeCodeWithAI(file.patch, apiKey),
-          analyzeSecurityWithAI(file.patch, apiKey)
-        ]);
-
-        // Update file with results
-        updatedFiles[i] = {
-          ...file,
-          analysis: codeAnalysis.status === 'fulfilled' ? codeAnalysis.value : `Analysis failed: ${codeAnalysis.reason?.message || 'Unknown error'}`,
-          securityAnalysis: securityAnalysis.status === 'fulfilled' ? securityAnalysis.value : `Security analysis failed: ${securityAnalysis.reason?.message || 'Unknown error'}`
-        };
-
-        setAnalysisProgress(prev => ({ 
-          ...prev, 
-          [i]: { 
-            codeQuality: codeAnalysis.status === 'fulfilled' ? 'completed' : 'failed',
-            security: securityAnalysis.status === 'fulfilled' ? 'completed' : 'failed'
-          } 
-        }));
-
-        // Update fileData with the new analysis results
-        setFileData(prev => ({
-          ...prev,
-          files: updatedFiles
-        }));
+      let analysis;
+      if (analysisType === 'codeQuality') {
+        analysis = await analyzeCodeWithAI(file.patch, aiApiKey);
+      } else if (analysisType === 'security') {
+        analysis = await analyzeSecurityWithAI(file.patch, aiApiKey);
       }
+
+      // Update the file data with the analysis
+      setFileData(prev => ({
+        ...prev,
+        files: prev.files.map((f, index) => 
+          index === fileIndex 
+            ? { 
+                ...f, 
+                [analysisType === 'codeQuality' ? 'analysis' : 'securityAnalysis']: analysis 
+              } 
+            : f
+        )
+      }));
     } catch (error) {
-      setErrorMessage(`Analysis failed: ${error.message}`);
+      setErrorMessage(`${analysisType === 'codeQuality' ? 'Code quality' : 'Security'} analysis failed for ${file.filename}: ${error.message}`);
     } finally {
-      setIsAnalyzing(false);
+      setAnalyzingFiles(prev => ({ 
+        ...prev, 
+        [`${fileIndex}-${analysisType}`]: false 
+      }));
     }
   };
 
@@ -426,15 +417,39 @@ function App() {
               +{file.additions} -{file.deletions} ({file.changes} changes)
             </div>
             
-            {/* Analysis Status */}
-            {isAnalyzing && analysisProgress[index] && (
-              <div style={{ marginBottom: 8, fontSize: '12px' }}>
-                <div>Code Quality: {analysisProgress[index].codeQuality === 'running' ? '🔄 Analyzing...' : 
-                                   analysisProgress[index].codeQuality === 'completed' ? '✅ Complete' : 
-                                   analysisProgress[index].codeQuality === 'failed' ? '❌ Failed' : '⏳ Pending'}</div>
-                <div>Security: {analysisProgress[index].security === 'running' ? '🔄 Analyzing...' : 
-                               analysisProgress[index].security === 'completed' ? '✅ Complete' : 
-                               analysisProgress[index].security === 'failed' ? '❌ Failed' : '⏳ Pending'}</div>
+            {/* Analysis Buttons */}
+            {file.patch && (
+              <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => handleAnalyzeFile(index, 'codeQuality')}
+                  disabled={analyzingFiles[`${index}-codeQuality`]}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    backgroundColor: '#0366d6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {analyzingFiles[`${index}-codeQuality`] ? '🔄 Analyzing...' : '🐛 Code Quality'}
+                </button>
+                <button
+                  onClick={() => handleAnalyzeFile(index, 'security')}
+                  disabled={analyzingFiles[`${index}-security`]}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    backgroundColor: '#d73a49',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {analyzingFiles[`${index}-security`] ? '🔄 Analyzing...' : '🔒 Security Review'}
+                </button>
               </div>
             )}
             
@@ -446,7 +461,7 @@ function App() {
                 border: '1px solid #ffeaa7',
                 borderRadius: 4
               }}>
-                <strong>Bugs & Code Quality Issues:</strong>
+                <strong>🐛 Bugs & Code Quality Issues:</strong>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
                   {file.analysis}
                 </div>
@@ -461,7 +476,7 @@ function App() {
                 border: '1px solid #f5c6cb',
                 borderRadius: 4
               }}>
-                <strong>Security Issues:</strong>
+                <strong>🔒 Security Issues:</strong>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
                   {file.securityAnalysis}
                 </div>
@@ -495,7 +510,6 @@ function App() {
 
   const renderResult = () => {
     if (isLoading) return <div>Loading PR data…</div>;
-    if (isAnalyzing) return <div>🔄 Running AI analysis on all files…</div>;
     if (errorMessage) return <div style={{ color: '#b00020' }}>{errorMessage}</div>;
     if (!prData) return <div>Enter a GitHub PR URL above and press Submit.</div>;
 
@@ -597,8 +611,8 @@ function App() {
             onChange={(e) => setPrUrl(e.target.value)}
             className="pr-input"
           />
-          <button type="submit" className="submit-btn" disabled={isLoading || isAnalyzing}>
-            {isLoading ? 'Fetching…' : isAnalyzing ? 'Analyzing…' : 'Submit'}
+          <button type="submit" className="submit-btn" disabled={isLoading}>
+            {isLoading ? 'Fetching…' : 'Submit'}
           </button>
         </div>
         <input
