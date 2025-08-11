@@ -142,6 +142,65 @@ async function analyzeSecurityWithAI(codeSnippet, apiKey) {
   }
 }
 
+async function autoFixSuggestions(codeSnippet, findingsText, apiKey) {
+  try {
+    if (!codeSnippet || !codeSnippet.trim()) {
+      throw new Error('Code snippet is required');
+    }
+
+    if (!findingsText || !findingsText.trim()) {
+      throw new Error('Findings text is required');
+    }
+
+    if (!apiKey || !apiKey.trim()) {
+      throw new Error('API key is required');
+    }
+
+    const response = await fetch('https://api.chatanywhere.tech/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.trim()}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-5-nano',
+        messages: [
+          {
+            role: 'user',
+            content: `Given the following code snippet and its bug/security findings, provide concise code fix suggestions and tips to avoid these vulnerabilities in the future.\n\nCode Snippet:\n${codeSnippet}\n\nFindings:\n${findingsText}`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 1000
+      })
+    });
+
+    if (!response.ok) {
+      let errorMessage = `API error ${response.status}`;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.error && errorBody.error.message) {
+          errorMessage += `: ${errorBody.error.message}`;
+        }
+      } catch {
+        // Ignore JSON parsing errors for error responses
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Invalid response format from API');
+    }
+
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    throw new Error(`Fix suggestions failed: ${error.message}`);
+  }
+}
+
 async function fetchPrFiles(owner, repo, prNumber, token = '') {
   try {
     if (!owner || !repo || !prNumber) {
@@ -239,6 +298,12 @@ function App() {
         report += `SECURITY VULNERABILITIES:\n`;
         report += `-------------------------\n`;
         report += `${file.securityAnalysis}\n\n`;
+      }
+
+      if (file.fixSuggestions) {
+        report += `FIX SUGGESTIONS:\n`;
+        report += `----------------\n`;
+        report += `${file.fixSuggestions}\n\n`;
       }
 
       report += `DIFF:\n`;
@@ -371,6 +436,52 @@ function App() {
             : f
         )
       }));
+
+      // Auto-generate fix suggestions if we have both analyses or if this is the second analysis
+      const updatedFile = fileData.files[fileIndex];
+      const hasCodeQuality = analysisType === 'codeQuality' ? analysis : updatedFile.analysis;
+      const hasSecurity = analysisType === 'security' ? analysis : updatedFile.securityAnalysis;
+      
+      if (hasCodeQuality || hasSecurity) {
+        // Set loading state for fix suggestions
+        setAnalyzingFiles(prev => ({ 
+          ...prev, 
+          [`${fileIndex}-fixSuggestions`]: true 
+        }));
+
+        try {
+          // Combine findings from both analyses
+          const findings = [];
+          if (hasCodeQuality) findings.push(`Code Quality Issues:\n${hasCodeQuality}`);
+          if (hasSecurity) findings.push(`Security Issues:\n${hasSecurity}`);
+          
+          const findingsText = findings.join('\n\n');
+          const fixSuggestions = await autoFixSuggestions(file.patch, findingsText, aiApiKey);
+
+          // Update the file data with the fix suggestions
+          setFileData(prev => ({
+            ...prev,
+            files: prev.files.map((f, index) => 
+              index === fileIndex 
+                ? { 
+                    ...f, 
+                    [analysisType === 'codeQuality' ? 'analysis' : 'securityAnalysis']: analysis,
+                    fixSuggestions 
+                  } 
+                : f
+            )
+          }));
+        } catch (fixError) {
+          // Don't fail the main analysis if fix suggestions fail
+          console.warn(`Fix suggestions failed for ${file.filename}:`, fixError);
+        } finally {
+          setAnalyzingFiles(prev => ({ 
+            ...prev, 
+            [`${fileIndex}-fixSuggestions`]: false 
+          }));
+        }
+      }
+
     } catch (error) {
       setErrorMessage(`${analysisType === 'codeQuality' ? 'Code quality' : 'Security'} analysis failed for ${file.filename}: ${error.message}`);
     } finally {
@@ -452,34 +563,135 @@ function App() {
                 </button>
               </div>
             )}
-            
-            {file.analysis && (
+
+            {/* Analysis Results Section */}
+            {(file.analysis || file.securityAnalysis || file.fixSuggestions || 
+              analyzingFiles[`${index}-codeQuality`] || analyzingFiles[`${index}-security`] || analyzingFiles[`${index}-fixSuggestions`]) && (
               <div style={{ 
-                marginBottom: 8, 
-                padding: 8, 
-                backgroundColor: '#fff3cd', 
-                border: '1px solid #ffeaa7',
+                marginTop: 12, 
+                padding: 12, 
+                backgroundColor: 'white', 
+                border: '1px solid #e1e4e8',
                 borderRadius: 4
               }}>
-                <strong>🐛 Bugs & Code Quality Issues:</strong>
-                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
-                  {file.analysis}
-                </div>
-              </div>
-            )}
-            
-            {file.securityAnalysis && (
-              <div style={{ 
-                marginBottom: 8, 
-                padding: 8, 
-                backgroundColor: '#f8d7da', 
-                border: '1px solid #f5c6cb',
-                borderRadius: 4
-              }}>
-                <strong>🔒 Security Issues:</strong>
-                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
-                  {file.securityAnalysis}
-                </div>
+                
+                {/* Bug Findings Section */}
+                {file.analysis && (
+                  <div style={{ marginBottom: 16 }}>
+                    <h4 style={{ 
+                      margin: '0 0 8px 0', 
+                      color: '#d73a49', 
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      borderBottom: '2px solid #d73a49',
+                      paddingBottom: '4px'
+                    }}>
+                      🐛 Bug Findings
+                    </h4>
+                    <div style={{ 
+                      padding: 8, 
+                      backgroundColor: '#fff3cd', 
+                      border: '1px solid #ffeaa7',
+                      borderRadius: 4,
+                      whiteSpace: 'pre-wrap', 
+                      fontSize: '14px' 
+                    }}>
+                      {file.analysis}
+                    </div>
+                  </div>
+                )}
+
+                {/* Security Issues Section */}
+                {file.securityAnalysis && (
+                  <div style={{ marginBottom: 16 }}>
+                    <h4 style={{ 
+                      margin: '0 0 8px 0', 
+                      color: '#d73a49', 
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      borderBottom: '2px solid #d73a49',
+                      paddingBottom: '4px'
+                    }}>
+                      🔒 Security Issues
+                    </h4>
+                    <div style={{ 
+                      padding: 8, 
+                      backgroundColor: '#f8d7da', 
+                      border: '1px solid #f5c6cb',
+                      borderRadius: 4,
+                      whiteSpace: 'pre-wrap', 
+                      fontSize: '14px' 
+                    }}>
+                      {file.securityAnalysis}
+                    </div>
+                  </div>
+                )}
+
+                {/* Fix Suggestions Section */}
+                {file.fixSuggestions && (
+                  <div style={{ marginBottom: 16 }}>
+                    <h4 style={{ 
+                      margin: '0 0 8px 0', 
+                      color: '#28a745', 
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      borderBottom: '2px solid #28a745',
+                      paddingBottom: '4px'
+                    }}>
+                      🔧 Fix Suggestions & Tips
+                    </h4>
+                    <div style={{ 
+                      padding: 8, 
+                      backgroundColor: '#d1ecf1', 
+                      border: '1px solid #bee5eb',
+                      borderRadius: 4,
+                      whiteSpace: 'pre-wrap', 
+                      fontSize: '14px' 
+                    }}>
+                      {file.fixSuggestions}
+                    </div>
+                  </div>
+                )}
+
+                {/* Loading Indicators */}
+                {analyzingFiles[`${index}-codeQuality`] && (
+                  <div style={{ 
+                    padding: 8, 
+                    backgroundColor: '#e3f2fd', 
+                    border: '1px solid #bbdefb',
+                    borderRadius: 4,
+                    fontSize: '14px',
+                    color: '#1976d2'
+                  }}>
+                    🔄 Analyzing code quality...
+                  </div>
+                )}
+
+                {analyzingFiles[`${index}-security`] && (
+                  <div style={{ 
+                    padding: 8, 
+                    backgroundColor: '#e3f2fd', 
+                    border: '1px solid #bbdefb',
+                    borderRadius: 4,
+                    fontSize: '14px',
+                    color: '#1976d2'
+                  }}>
+                    🔄 Analyzing security vulnerabilities...
+                  </div>
+                )}
+
+                {analyzingFiles[`${index}-fixSuggestions`] && (
+                  <div style={{ 
+                    padding: 8, 
+                    backgroundColor: '#e3f2fd', 
+                    border: '1px solid #bbdefb',
+                    borderRadius: 4,
+                    fontSize: '14px',
+                    color: '#1976d2'
+                  }}>
+                    🔄 Generating fix suggestions...
+                  </div>
+                )}
               </div>
             )}
             
@@ -552,7 +764,7 @@ function App() {
         )}
         
         {/* Export Buttons */}
-        {fileData && (fileData.files.some(f => f.analysis || f.securityAnalysis)) && (
+        {fileData && (fileData.files.some(f => f.analysis || f.securityAnalysis || f.fixSuggestions)) && (
           <div style={{ 
             marginTop: 16, 
             borderTop: '2px solid #e1e4e8', 
