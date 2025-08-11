@@ -34,6 +34,7 @@ function parseGitHubPrUrl(input) {
 
 function App() {
   const [prUrl, setPrUrl] = useState('');
+  const [token, setToken] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [prData, setPrData] = useState(null);
@@ -56,11 +57,16 @@ function App() {
 
     setIsLoading(true);
     try {
-      const res = await fetch(apiUrl, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-        },
-      });
+      const headers = {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+      const trimmedToken = token.trim();
+      if (trimmedToken) {
+        headers.Authorization = `Bearer ${trimmedToken}`;
+      }
+
+      const res = await fetch(apiUrl, { headers });
 
       if (!res.ok) {
         let details = '';
@@ -128,17 +134,27 @@ function App() {
 
   return (
     <div className="app-container">
-      <form onSubmit={handleSubmit} className="input-form">
+      <form onSubmit={handleSubmit} className="input-form" style={{ flexDirection: 'column' }}>
+        <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+          <input
+            type="text"
+            placeholder="Enter GitHub PR URL"
+            value={prUrl}
+            onChange={(e) => setPrUrl(e.target.value)}
+            className="pr-input"
+          />
+          <button type="submit" className="submit-btn" disabled={isLoading}>
+            {isLoading ? 'Fetching…' : 'Submit'}
+          </button>
+        </div>
         <input
-          type="text"
-          placeholder="Enter GitHub PR URL"
-          value={prUrl}
-          onChange={(e) => setPrUrl(e.target.value)}
+          type="password"
+          placeholder="Optional: GitHub token (for private repos or higher limits)"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
           className="pr-input"
+          style={{ marginTop: 10 }}
         />
-        <button type="submit" className="submit-btn" disabled={isLoading}>
-          {isLoading ? 'Fetching…' : 'Submit'}
-        </button>
       </form>
       <div className="result-area">
         {renderResult()}
