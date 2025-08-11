@@ -32,17 +32,79 @@ function parseGitHubPrUrl(input) {
   return { owner, repo, prNumber };
 }
 
+async function fetchPrFiles(owner, repo, prNumber, token = '') {
+  try {
+    if (!owner || !repo || !prNumber) {
+      throw new Error('Owner, repo, and PR number are required');
+    }
+    
+    if (!Number.isInteger(Number(prNumber)) || Number(prNumber) <= 0) {
+      throw new Error('PR number must be a positive integer');
+    }
+
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files`;
+    
+    const headers = {
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    
+    if (token && token.trim()) {
+      headers['Authorization'] = `Bearer ${token.trim()}`;
+    }
+
+    const response = await fetch(apiUrl, { headers });
+    
+    if (!response.ok) {
+      let errorMessage = `GitHub API error ${response.status}`;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.message) {
+          errorMessage += `: ${errorBody.message}`;
+        }
+      } catch {
+        // Ignore JSON parsing errors for error responses
+      }
+      throw new Error(errorMessage);
+    }
+
+    const files = await response.json();
+    
+    const limitedFiles = files.slice(0, 3).map(file => ({
+      filename: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.changes,
+      patch: file.patch || null,
+      raw_url: file.raw_url,
+      blob_url: file.blob_url
+    }));
+
+    return {
+      totalFiles: files.length,
+      filesShown: limitedFiles.length,
+      files: limitedFiles
+    };
+
+  } catch (error) {
+    throw new Error(`Failed to fetch PR files: ${error.message}`);
+  }
+}
+
 function App() {
   const [prUrl, setPrUrl] = useState('');
   const [token, setToken] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [prData, setPrData] = useState(null);
+  const [fileData, setFileData] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
     setPrData(null);
+    setFileData(null);
 
     let parsed;
     try {
@@ -66,26 +128,91 @@ function App() {
         headers.Authorization = `Bearer ${trimmedToken}`;
       }
 
-      const res = await fetch(apiUrl, { headers });
+      // Fetch PR details and files in parallel
+      const [prResponse, fileResponse] = await Promise.all([
+        fetch(apiUrl, { headers }),
+        fetchPrFiles(owner, repo, prNumber, trimmedToken)
+      ]);
 
-      if (!res.ok) {
+      if (!prResponse.ok) {
         let details = '';
         try {
-          const body = await res.json();
+          const body = await prResponse.json();
           details = body && body.message ? `: ${body.message}` : '';
         } catch {
           // ignore
         }
-        throw new Error(`GitHub API error ${res.status}${details}`);
+        throw new Error(`GitHub API error ${prResponse.status}${details}`);
       }
 
-      const data = await res.json();
+      const data = await prResponse.json();
       setPrData({ owner, repo, prNumber, details: data });
+      setFileData(fileResponse);
     } catch (err) {
       setErrorMessage(err.message || 'Failed to fetch PR');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const renderFileChanges = (files) => {
+    if (!files || files.length === 0) {
+      return <div>No file changes found.</div>;
+    }
+
+    return (
+      <div>
+        <div style={{ marginBottom: 12, fontWeight: 'bold' }}>
+          Changed Files ({fileData.totalFiles} total, showing first {fileData.filesShown}):
+        </div>
+        {files.map((file, index) => (
+          <div key={index} style={{ 
+            border: '1px solid #e1e4e8', 
+            borderRadius: 6, 
+            marginBottom: 12, 
+            padding: 12,
+            backgroundColor: '#f6f8fa'
+          }}>
+            <div style={{ marginBottom: 8 }}>
+              <strong>{file.filename}</strong>
+              <span style={{ 
+                marginLeft: 8, 
+                padding: '2px 6px', 
+                borderRadius: 3, 
+                fontSize: '12px',
+                backgroundColor: file.status === 'added' ? '#28a745' : 
+                               file.status === 'removed' ? '#d73a49' : '#0366d6',
+                color: 'white'
+              }}>
+                {file.status}
+              </span>
+            </div>
+            <div style={{ marginBottom: 8, fontSize: '14px', color: '#586069' }}>
+              +{file.additions} -{file.deletions} ({file.changes} changes)
+            </div>
+            {file.patch && (
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
+                  View Diff
+                </summary>
+                <pre style={{ 
+                  marginTop: 8, 
+                  padding: 8, 
+                  backgroundColor: '#f1f3f4', 
+                  borderRadius: 4, 
+                  fontSize: '12px',
+                  overflow: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'monospace'
+                }}>
+                  {file.patch}
+                </pre>
+              </details>
+            )}
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const renderResult = () => {
@@ -123,8 +250,16 @@ function App() {
           <strong>Created:</strong> {d.created_at ? new Date(d.created_at).toLocaleString() : 'N/A'}
           {d.updated_at ? ` • Updated: ${new Date(d.updated_at).toLocaleString()}` : ''}
         </div>
+        
+        {/* File Changes Section */}
+        {fileData && (
+          <div style={{ marginTop: 16, borderTop: '2px solid #e1e4e8', paddingTop: 16 }}>
+            {renderFileChanges(fileData.files)}
+          </div>
+        )}
+        
         {d.body ? (
-          <div style={{ whiteSpace: 'pre-wrap', borderTop: '1px solid #eee', paddingTop: 8 }}>
+          <div style={{ whiteSpace: 'pre-wrap', borderTop: '1px solid #eee', paddingTop: 8, marginTop: 16 }}>
             {d.body}
           </div>
         ) : null}
