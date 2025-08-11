@@ -207,19 +207,83 @@ function App() {
   const [token, setToken] = useState('');
   const [aiApiKey, setAiApiKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [prData, setPrData] = useState(null);
   const [fileData, setFileData] = useState(null);
-  const [analyzingFiles, setAnalyzingFiles] = useState({});
-  const [securityAnalyzingFiles, setSecurityAnalyzingFiles] = useState({});
+  const [analysisProgress, setAnalysisProgress] = useState({});
+
+  const generateReportText = () => {
+    if (!prData || !fileData) return '';
+
+    let report = `GitHub PR Analysis Report\n`;
+    report += `================================\n\n`;
+    report += `Repository: ${prData.owner}/${prData.repo}\n`;
+    report += `PR #${prData.prNumber}: ${prData.details.title}\n`;
+    report += `Author: ${prData.details.user?.login || 'Unknown'}\n`;
+    report += `Status: ${prData.details.merged_at ? 'merged' : prData.details.state}\n`;
+    report += `Created: ${prData.details.created_at ? new Date(prData.details.created_at).toLocaleString() : 'N/A'}\n`;
+    report += `Files Analyzed: ${fileData.filesShown} of ${fileData.totalFiles}\n\n`;
+
+    fileData.files.forEach((file, index) => {
+      report += `File ${index + 1}: ${file.filename}\n`;
+      report += `Status: ${file.status}\n`;
+      report += `Changes: +${file.additions} -${file.deletions} (${file.changes} total)\n\n`;
+
+      if (file.analysis) {
+        report += `BUGS & CODE QUALITY ISSUES:\n`;
+        report += `-------------------------\n`;
+        report += `${file.analysis}\n\n`;
+      }
+
+      if (file.securityAnalysis) {
+        report += `SECURITY VULNERABILITIES:\n`;
+        report += `-------------------------\n`;
+        report += `${file.securityAnalysis}\n\n`;
+      }
+
+      report += `DIFF:\n`;
+      report += `-----\n`;
+      report += `${file.patch || 'No diff available'}\n\n`;
+      report += `================================\n\n`;
+    });
+
+    return report;
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      const reportText = generateReportText();
+      await navigator.clipboard.writeText(reportText);
+      alert('Report copied to clipboard!');
+    } catch (error) {
+      alert('Failed to copy to clipboard: ' + error.message);
+    }
+  };
+
+  const downloadReport = () => {
+    try {
+      const reportText = generateReportText();
+      const blob = new Blob([reportText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pr-analysis-${prData.owner}-${prData.repo}-${prData.prNumber}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      alert('Failed to download report: ' + error.message);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
     setPrData(null);
     setFileData(null);
-    setAnalyzingFiles({});
-    setSecurityAnalyzingFiles({});
+    setAnalysisProgress({});
 
     let parsed;
     try {
@@ -263,6 +327,12 @@ function App() {
       const data = await prResponse.json();
       setPrData({ owner, repo, prNumber, details: data });
       setFileData(fileResponse);
+
+      // Auto-run AI analysis if API key is provided
+      if (aiApiKey.trim()) {
+        await runAllAnalyses(fileResponse.files, aiApiKey);
+      }
+
     } catch (err) {
       setErrorMessage(err.message || 'Failed to fetch PR');
     } finally {
@@ -270,57 +340,53 @@ function App() {
     }
   };
 
-  const handleAnalyzeFile = async (fileIndex, patch) => {
-    if (!aiApiKey.trim()) {
-      setErrorMessage('Please enter your ChatAnywhere API key to analyze code');
-      return;
-    }
+  const runAllAnalyses = async (files, apiKey) => {
+    setIsAnalyzing(true);
+    setAnalysisProgress({});
 
-    setAnalyzingFiles(prev => ({ ...prev, [fileIndex]: true }));
-    
     try {
-      const analysis = await analyzeCodeWithAI(patch, aiApiKey);
+      const updatedFiles = [...files];
       
-      // Update the file data with the analysis
-      setFileData(prev => ({
-        ...prev,
-        files: prev.files.map((file, index) => 
-          index === fileIndex 
-            ? { ...file, analysis } 
-            : file
-        )
-      }));
-    } catch (error) {
-      setErrorMessage(`Analysis failed for ${fileData.files[fileIndex].filename}: ${error.message}`);
-    } finally {
-      setAnalyzingFiles(prev => ({ ...prev, [fileIndex]: false }));
-    }
-  };
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!file.patch) continue;
 
-  const handleSecurityAnalyzeFile = async (fileIndex, patch) => {
-    if (!aiApiKey.trim()) {
-      setErrorMessage('Please enter your ChatAnywhere API key to analyze security');
-      return;
-    }
+        setAnalysisProgress(prev => ({ 
+          ...prev, 
+          [i]: { codeQuality: 'running', security: 'running' } 
+        }));
 
-    setSecurityAnalyzingFiles(prev => ({ ...prev, [fileIndex]: true }));
-    
-    try {
-      const securityAnalysis = await analyzeSecurityWithAI(patch, aiApiKey);
-      
-      // Update the file data with the security analysis
-      setFileData(prev => ({
-        ...prev,
-        files: prev.files.map((file, index) => 
-          index === fileIndex 
-            ? { ...file, securityAnalysis } 
-            : file
-        )
-      }));
+        // Run both analyses in parallel for each file
+        const [codeAnalysis, securityAnalysis] = await Promise.allSettled([
+          analyzeCodeWithAI(file.patch, apiKey),
+          analyzeSecurityWithAI(file.patch, apiKey)
+        ]);
+
+        // Update file with results
+        updatedFiles[i] = {
+          ...file,
+          analysis: codeAnalysis.status === 'fulfilled' ? codeAnalysis.value : `Analysis failed: ${codeAnalysis.reason?.message || 'Unknown error'}`,
+          securityAnalysis: securityAnalysis.status === 'fulfilled' ? securityAnalysis.value : `Security analysis failed: ${securityAnalysis.reason?.message || 'Unknown error'}`
+        };
+
+        setAnalysisProgress(prev => ({ 
+          ...prev, 
+          [i]: { 
+            codeQuality: codeAnalysis.status === 'fulfilled' ? 'completed' : 'failed',
+            security: securityAnalysis.status === 'fulfilled' ? 'completed' : 'failed'
+          } 
+        }));
+
+        // Update fileData with the new analysis results
+        setFileData(prev => ({
+          ...prev,
+          files: updatedFiles
+        }));
+      }
     } catch (error) {
-      setErrorMessage(`Security analysis failed for ${fileData.files[fileIndex].filename}: ${error.message}`);
+      setErrorMessage(`Analysis failed: ${error.message}`);
     } finally {
-      setSecurityAnalyzingFiles(prev => ({ ...prev, [fileIndex]: false }));
+      setIsAnalyzing(false);
     }
   };
 
@@ -360,39 +426,15 @@ function App() {
               +{file.additions} -{file.deletions} ({file.changes} changes)
             </div>
             
-            {/* AI Analysis Section */}
-            {file.patch && (
-              <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => handleAnalyzeFile(index, file.patch)}
-                  disabled={analyzingFiles[index]}
-                  style={{
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    backgroundColor: '#0366d6',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 3,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {analyzingFiles[index] ? 'Analyzing...' : 'Code Quality'}
-                </button>
-                <button
-                  onClick={() => handleSecurityAnalyzeFile(index, file.patch)}
-                  disabled={securityAnalyzingFiles[index]}
-                  style={{
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    backgroundColor: '#d73a49',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 3,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {securityAnalyzingFiles[index] ? 'Analyzing...' : 'Security Review'}
-                </button>
+            {/* Analysis Status */}
+            {isAnalyzing && analysisProgress[index] && (
+              <div style={{ marginBottom: 8, fontSize: '12px' }}>
+                <div>Code Quality: {analysisProgress[index].codeQuality === 'running' ? '🔄 Analyzing...' : 
+                                   analysisProgress[index].codeQuality === 'completed' ? '✅ Complete' : 
+                                   analysisProgress[index].codeQuality === 'failed' ? '❌ Failed' : '⏳ Pending'}</div>
+                <div>Security: {analysisProgress[index].security === 'running' ? '🔄 Analyzing...' : 
+                               analysisProgress[index].security === 'completed' ? '✅ Complete' : 
+                               analysisProgress[index].security === 'failed' ? '❌ Failed' : '⏳ Pending'}</div>
               </div>
             )}
             
@@ -404,7 +446,7 @@ function App() {
                 border: '1px solid #ffeaa7',
                 borderRadius: 4
               }}>
-                <strong>Code Quality Analysis:</strong>
+                <strong>Bugs & Code Quality Issues:</strong>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
                   {file.analysis}
                 </div>
@@ -419,7 +461,7 @@ function App() {
                 border: '1px solid #f5c6cb',
                 borderRadius: 4
               }}>
-                <strong>Security Analysis:</strong>
+                <strong>Security Issues:</strong>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
                   {file.securityAnalysis}
                 </div>
@@ -452,7 +494,8 @@ function App() {
   };
 
   const renderResult = () => {
-    if (isLoading) return <div>Loading…</div>;
+    if (isLoading) return <div>Loading PR data…</div>;
+    if (isAnalyzing) return <div>🔄 Running AI analysis on all files…</div>;
     if (errorMessage) return <div style={{ color: '#b00020' }}>{errorMessage}</div>;
     if (!prData) return <div>Enter a GitHub PR URL above and press Submit.</div>;
 
@@ -494,6 +537,46 @@ function App() {
           </div>
         )}
         
+        {/* Export Buttons */}
+        {fileData && (fileData.files.some(f => f.analysis || f.securityAnalysis)) && (
+          <div style={{ 
+            marginTop: 16, 
+            borderTop: '2px solid #e1e4e8', 
+            paddingTop: 16,
+            display: 'flex',
+            gap: 10
+          }}>
+            <button
+              onClick={copyToClipboard}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#0366d6',
+                color: 'white',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              📋 Copy Report
+            </button>
+            <button
+              onClick={downloadReport}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              💾 Download Report
+            </button>
+          </div>
+        )}
+        
         {d.body ? (
           <div style={{ whiteSpace: 'pre-wrap', borderTop: '1px solid #eee', paddingTop: 8, marginTop: 16 }}>
             {d.body}
@@ -514,8 +597,8 @@ function App() {
             onChange={(e) => setPrUrl(e.target.value)}
             className="pr-input"
           />
-          <button type="submit" className="submit-btn" disabled={isLoading}>
-            {isLoading ? 'Fetching…' : 'Submit'}
+          <button type="submit" className="submit-btn" disabled={isLoading || isAnalyzing}>
+            {isLoading ? 'Fetching…' : isAnalyzing ? 'Analyzing…' : 'Submit'}
           </button>
         </div>
         <input
