@@ -32,6 +32,116 @@ function parseGitHubPrUrl(input) {
   return { owner, repo, prNumber };
 }
 
+async function analyzeCodeWithAI(codeSnippet, apiKey) {
+  try {
+    if (!codeSnippet || !codeSnippet.trim()) {
+      throw new Error('Code snippet is required');
+    }
+
+    if (!apiKey || !apiKey.trim()) {
+      throw new Error('API key is required');
+    }
+
+    const response = await fetch('https://api.chatanywhere.tech/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.trim()}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-5-nano',
+        messages: [
+          {
+            role: 'user',
+            content: `Analyze the following code snippet for bugs, logic errors, or bad practices. Explain each issue simply:\n\n${codeSnippet}`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 1000
+      })
+    });
+
+    if (!response.ok) {
+      let errorMessage = `API error ${response.status}`;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.error && errorBody.error.message) {
+          errorMessage += `: ${errorBody.error.message}`;
+        }
+      } catch {
+        // Ignore JSON parsing errors for error responses
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Invalid response format from API');
+    }
+
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    throw new Error(`Code analysis failed: ${error.message}`);
+  }
+}
+
+async function analyzeSecurityWithAI(codeSnippet, apiKey) {
+  try {
+    if (!codeSnippet || !codeSnippet.trim()) {
+      throw new Error('Code snippet is required');
+    }
+
+    if (!apiKey || !apiKey.trim()) {
+      throw new Error('API key is required');
+    }
+
+    const response = await fetch('https://api.chatanywhere.tech/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.trim()}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-5-nano',
+        messages: [
+          {
+            role: 'user',
+            content: `Review this code snippet for common security vulnerabilities or risks (like injection flaws, hardcoded secrets, XSS, CSRF, authentication issues, authorization problems, data exposure, etc.). Explain each security issue simply and suggest fixes:\n\n${codeSnippet}`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 1000
+      })
+    });
+
+    if (!response.ok) {
+      let errorMessage = `API error ${response.status}`;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.error && errorBody.error.message) {
+          errorMessage += `: ${errorBody.error.message}`;
+        }
+      } catch {
+        // Ignore JSON parsing errors for error responses
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('Invalid response format from API');
+    }
+
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    throw new Error(`Security analysis failed: ${error.message}`);
+  }
+}
+
 async function fetchPrFiles(owner, repo, prNumber, token = '') {
   try {
     if (!owner || !repo || !prNumber) {
@@ -95,16 +205,21 @@ async function fetchPrFiles(owner, repo, prNumber, token = '') {
 function App() {
   const [prUrl, setPrUrl] = useState('');
   const [token, setToken] = useState('');
+  const [aiApiKey, setAiApiKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [prData, setPrData] = useState(null);
   const [fileData, setFileData] = useState(null);
+  const [analyzingFiles, setAnalyzingFiles] = useState({});
+  const [securityAnalyzingFiles, setSecurityAnalyzingFiles] = useState({});
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
     setPrData(null);
     setFileData(null);
+    setAnalyzingFiles({});
+    setSecurityAnalyzingFiles({});
 
     let parsed;
     try {
@@ -155,6 +270,60 @@ function App() {
     }
   };
 
+  const handleAnalyzeFile = async (fileIndex, patch) => {
+    if (!aiApiKey.trim()) {
+      setErrorMessage('Please enter your ChatAnywhere API key to analyze code');
+      return;
+    }
+
+    setAnalyzingFiles(prev => ({ ...prev, [fileIndex]: true }));
+    
+    try {
+      const analysis = await analyzeCodeWithAI(patch, aiApiKey);
+      
+      // Update the file data with the analysis
+      setFileData(prev => ({
+        ...prev,
+        files: prev.files.map((file, index) => 
+          index === fileIndex 
+            ? { ...file, analysis } 
+            : file
+        )
+      }));
+    } catch (error) {
+      setErrorMessage(`Analysis failed for ${fileData.files[fileIndex].filename}: ${error.message}`);
+    } finally {
+      setAnalyzingFiles(prev => ({ ...prev, [fileIndex]: false }));
+    }
+  };
+
+  const handleSecurityAnalyzeFile = async (fileIndex, patch) => {
+    if (!aiApiKey.trim()) {
+      setErrorMessage('Please enter your ChatAnywhere API key to analyze security');
+      return;
+    }
+
+    setSecurityAnalyzingFiles(prev => ({ ...prev, [fileIndex]: true }));
+    
+    try {
+      const securityAnalysis = await analyzeSecurityWithAI(patch, aiApiKey);
+      
+      // Update the file data with the security analysis
+      setFileData(prev => ({
+        ...prev,
+        files: prev.files.map((file, index) => 
+          index === fileIndex 
+            ? { ...file, securityAnalysis } 
+            : file
+        )
+      }));
+    } catch (error) {
+      setErrorMessage(`Security analysis failed for ${fileData.files[fileIndex].filename}: ${error.message}`);
+    } finally {
+      setSecurityAnalyzingFiles(prev => ({ ...prev, [fileIndex]: false }));
+    }
+  };
+
   const renderFileChanges = (files) => {
     if (!files || files.length === 0) {
       return <div>No file changes found.</div>;
@@ -190,6 +359,73 @@ function App() {
             <div style={{ marginBottom: 8, fontSize: '14px', color: '#586069' }}>
               +{file.additions} -{file.deletions} ({file.changes} changes)
             </div>
+            
+            {/* AI Analysis Section */}
+            {file.patch && (
+              <div style={{ marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => handleAnalyzeFile(index, file.patch)}
+                  disabled={analyzingFiles[index]}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    backgroundColor: '#0366d6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 3,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {analyzingFiles[index] ? 'Analyzing...' : 'Code Quality'}
+                </button>
+                <button
+                  onClick={() => handleSecurityAnalyzeFile(index, file.patch)}
+                  disabled={securityAnalyzingFiles[index]}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    backgroundColor: '#d73a49',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 3,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {securityAnalyzingFiles[index] ? 'Analyzing...' : 'Security Review'}
+                </button>
+              </div>
+            )}
+            
+            {file.analysis && (
+              <div style={{ 
+                marginBottom: 8, 
+                padding: 8, 
+                backgroundColor: '#fff3cd', 
+                border: '1px solid #ffeaa7',
+                borderRadius: 4
+              }}>
+                <strong>Code Quality Analysis:</strong>
+                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
+                  {file.analysis}
+                </div>
+              </div>
+            )}
+            
+            {file.securityAnalysis && (
+              <div style={{ 
+                marginBottom: 8, 
+                padding: 8, 
+                backgroundColor: '#f8d7da', 
+                border: '1px solid #f5c6cb',
+                borderRadius: 4
+              }}>
+                <strong>Security Analysis:</strong>
+                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
+                  {file.securityAnalysis}
+                </div>
+              </div>
+            )}
+            
             {file.patch && (
               <details style={{ marginTop: 8 }}>
                 <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>
@@ -287,6 +523,14 @@ function App() {
           placeholder="Optional: GitHub token (for private repos or higher limits)"
           value={token}
           onChange={(e) => setToken(e.target.value)}
+          className="pr-input"
+          style={{ marginTop: 10 }}
+        />
+        <input
+          type="password"
+          placeholder="ChatAnywhere API Key (for AI code analysis)"
+          value={aiApiKey}
+          onChange={(e) => setAiApiKey(e.target.value)}
           className="pr-input"
           style={{ marginTop: 10 }}
         />
