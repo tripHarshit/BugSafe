@@ -1,4 +1,4 @@
-# GitHub PR Viewer & AI Code Analyzer
+# BugSafe
 
 A powerful React application that analyzes GitHub Pull Requests using AI to detect bugs, security vulnerabilities, and automatically generate fix suggestions. Built with Vite and powered by ChatAnywhere API for intelligent code analysis.
 
@@ -41,7 +41,7 @@ A powerful React application that analyzes GitHub Pull Requests using AI to dete
 1. **Clone the repository**
    ```bash
    git clone <your-repo-url>
-   cd github-pr-viewer
+   cd BugSafe
    ```
 
 2. **Install dependencies**
