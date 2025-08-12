@@ -2,12 +2,11 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import classNames from 'classnames';
 
-const buttonVariants = {
-  primary: 'bg-gradient-to-r from-accent to-accent-purple text-white hover:shadow-glow-strong',
-  secondary: 'bg-surface border border-border text-text-primary hover:bg-surface-hover',
-  danger: 'bg-critical text-white hover:bg-critical/90',
-  ghost: 'text-text-primary hover:bg-surface-hover',
-  outline: 'border border-accent text-accent hover:bg-accent/10'
+const variants = {
+  primary: 'bg-gradient-to-r from-accent to-accent-purple text-white hover:shadow-glow-strong hover:scale-[1.02] active:scale-[0.99] transition-transform duration-200',
+  secondary: 'bg-surface border border-border text-text-primary hover:bg-surface-hover hover:shadow-glow transition-colors duration-200',
+  ghost: 'text-text-primary hover:bg-surface-hover transition-colors duration-200',
+  outline: 'border border-accent text-accent hover:bg-accent/10 transition-colors duration-200'
 };
 
 const sizeVariants = {
@@ -32,7 +31,7 @@ export function Button({
 }) {
   const baseClasses = classNames(
     'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-bg disabled:opacity-50 disabled:cursor-not-allowed',
-    buttonVariants[variant],
+    variants[variant],
     sizeVariants[size],
     className
   );
