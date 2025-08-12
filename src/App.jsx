@@ -142,65 +142,6 @@ async function analyzeSecurityWithAI(codeSnippet, apiKey) {
   }
 }
 
-async function autoFixSuggestions(codeSnippet, findingsText, apiKey) {
-  try {
-    if (!codeSnippet || !codeSnippet.trim()) {
-      throw new Error('Code snippet is required');
-    }
-
-    if (!findingsText || !findingsText.trim()) {
-      throw new Error('Findings text is required');
-    }
-
-    if (!apiKey || !apiKey.trim()) {
-      throw new Error('API key is required');
-    }
-
-    const response = await fetch('https://api.chatanywhere.tech/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-5-nano',
-        messages: [
-          {
-            role: 'user',
-            content: `Given the following code snippet and its bug/security findings, provide concise code fix suggestions and tips to avoid these vulnerabilities in the future.\n\nCode Snippet:\n${codeSnippet}\n\nFindings:\n${findingsText}`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1000
-      })
-    });
-
-    if (!response.ok) {
-      let errorMessage = `API error ${response.status}`;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.error && errorBody.error.message) {
-          errorMessage += `: ${errorBody.error.message}`;
-        }
-      } catch {
-        // Ignore JSON parsing errors for error responses
-      }
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      throw new Error('Invalid response format from API');
-    }
-
-    return data.choices[0].message.content;
-
-  } catch (error) {
-    throw new Error(`Fix suggestions failed: ${error.message}`);
-  }
-}
-
 async function fetchPrFiles(owner, repo, prNumber, token = '') {
   try {
     if (!owner || !repo || !prNumber) {
@@ -298,12 +239,6 @@ function App() {
         report += `SECURITY VULNERABILITIES:\n`;
         report += `-------------------------\n`;
         report += `${file.securityAnalysis}\n\n`;
-      }
-
-      if (file.fixSuggestions) {
-        report += `FIX SUGGESTIONS:\n`;
-        report += `----------------\n`;
-        report += `${file.fixSuggestions}\n\n`;
       }
 
       report += `DIFF:\n`;
@@ -436,52 +371,6 @@ function App() {
             : f
         )
       }));
-
-      // Auto-generate fix suggestions if we have both analyses or if this is the second analysis
-      const updatedFile = fileData.files[fileIndex];
-      const hasCodeQuality = analysisType === 'codeQuality' ? analysis : updatedFile.analysis;
-      const hasSecurity = analysisType === 'security' ? analysis : updatedFile.securityAnalysis;
-      
-      if (hasCodeQuality || hasSecurity) {
-        // Set loading state for fix suggestions
-        setAnalyzingFiles(prev => ({ 
-          ...prev, 
-          [`${fileIndex}-fixSuggestions`]: true 
-        }));
-
-        try {
-          // Combine findings from both analyses
-          const findings = [];
-          if (hasCodeQuality) findings.push(`Code Quality Issues:\n${hasCodeQuality}`);
-          if (hasSecurity) findings.push(`Security Issues:\n${hasSecurity}`);
-          
-          const findingsText = findings.join('\n\n');
-          const fixSuggestions = await autoFixSuggestions(file.patch, findingsText, aiApiKey);
-
-          // Update the file data with the fix suggestions
-          setFileData(prev => ({
-            ...prev,
-            files: prev.files.map((f, index) => 
-              index === fileIndex 
-                ? { 
-                    ...f, 
-                    [analysisType === 'codeQuality' ? 'analysis' : 'securityAnalysis']: analysis,
-                    fixSuggestions 
-                  } 
-                : f
-            )
-          }));
-        } catch (fixError) {
-          // Don't fail the main analysis if fix suggestions fail
-          console.warn(`Fix suggestions failed for ${file.filename}:`, fixError);
-        } finally {
-          setAnalyzingFiles(prev => ({ 
-            ...prev, 
-            [`${fileIndex}-fixSuggestions`]: false 
-          }));
-        }
-      }
-
     } catch (error) {
       setErrorMessage(`${analysisType === 'codeQuality' ? 'Code quality' : 'Security'} analysis failed for ${file.filename}: ${error.message}`);
     } finally {
@@ -497,32 +386,21 @@ function App() {
       return <div>No file changes found.</div>;
     }
 
-    return (
-      <div>
-        <div style={{ marginBottom: 12, fontWeight: 'bold' }}>
-          Changed Files ({fileData.totalFiles} total, showing first {fileData.filesShown}):
-        </div>
-        {files.map((file, index) => (
-          <div key={index} style={{ 
-            border: '1px solid #e1e4e8', 
-            borderRadius: 6, 
-            marginBottom: 12, 
-            padding: 12,
-            backgroundColor: '#f6f8fa'
-          }}>
-            <div style={{ marginBottom: 8 }}>
-              <strong>{file.filename}</strong>
-              <span style={{ 
-                marginLeft: 8, 
-                padding: '2px 6px', 
-                borderRadius: 3, 
-                fontSize: '12px',
-                backgroundColor: file.status === 'added' ? '#28a745' : 
-                               file.status === 'removed' ? '#d73a49' : '#0366d6',
-                color: 'white'
-              }}>
-                {file.status}
-              </span>
+  return (
+    <div className="min-h-screen bg-bg">
+      {/* Sidebar */}
+      <motion.aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 glass transform transition-transform duration-300 ease-in-out ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } lg:translate-x-0 lg:static lg:inset-0`}
+        initial={prefersReducedMotion ? false : { x: -256 }}
+        animate={prefersReducedMotion ? false : { x: 0 }}
+        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+      >
+        <div className="flex items-center justify-between h-16 px-6 border-b border-border">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-gradient-to-r from-accent to-accent-purple rounded-lg flex items-center justify-center">
+              <Shield className="w-5 h-5 text-white" />
             </div>
             <div style={{ marginBottom: 8, fontSize: '14px', color: '#586069' }}>
               +{file.additions} -{file.deletions} ({file.changes} changes)
@@ -563,135 +441,34 @@ function App() {
                 </button>
               </div>
             )}
-
-            {/* Analysis Results Section */}
-            {(file.analysis || file.securityAnalysis || file.fixSuggestions || 
-              analyzingFiles[`${index}-codeQuality`] || analyzingFiles[`${index}-security`] || analyzingFiles[`${index}-fixSuggestions`]) && (
+            
+            {file.analysis && (
               <div style={{ 
-                marginTop: 12, 
-                padding: 12, 
-                backgroundColor: 'white', 
-                border: '1px solid #e1e4e8',
+                marginBottom: 8, 
+                padding: 8, 
+                backgroundColor: '#fff3cd', 
+                border: '1px solid #ffeaa7',
                 borderRadius: 4
               }}>
-                
-                {/* Bug Findings Section */}
-                {file.analysis && (
-                  <div style={{ marginBottom: 16 }}>
-                    <h4 style={{ 
-                      margin: '0 0 8px 0', 
-                      color: '#d73a49', 
-                      fontSize: '14px',
-                      fontWeight: 'bold',
-                      borderBottom: '2px solid #d73a49',
-                      paddingBottom: '4px'
-                    }}>
-                      🐛 Bug Findings
-                    </h4>
-                    <div style={{ 
-                      padding: 8, 
-                      backgroundColor: '#fff3cd', 
-                      border: '1px solid #ffeaa7',
-                      borderRadius: 4,
-                      whiteSpace: 'pre-wrap', 
-                      fontSize: '14px' 
-                    }}>
-                      {file.analysis}
-                    </div>
-                  </div>
-                )}
-
-                {/* Security Issues Section */}
-                {file.securityAnalysis && (
-                  <div style={{ marginBottom: 16 }}>
-                    <h4 style={{ 
-                      margin: '0 0 8px 0', 
-                      color: '#d73a49', 
-                      fontSize: '14px',
-                      fontWeight: 'bold',
-                      borderBottom: '2px solid #d73a49',
-                      paddingBottom: '4px'
-                    }}>
-                      🔒 Security Issues
-                    </h4>
-                    <div style={{ 
-                      padding: 8, 
-                      backgroundColor: '#f8d7da', 
-                      border: '1px solid #f5c6cb',
-                      borderRadius: 4,
-                      whiteSpace: 'pre-wrap', 
-                      fontSize: '14px' 
-                    }}>
-                      {file.securityAnalysis}
-                    </div>
-                  </div>
-                )}
-
-                {/* Fix Suggestions Section */}
-                {file.fixSuggestions && (
-                  <div style={{ marginBottom: 16 }}>
-                    <h4 style={{ 
-                      margin: '0 0 8px 0', 
-                      color: '#28a745', 
-                      fontSize: '14px',
-                      fontWeight: 'bold',
-                      borderBottom: '2px solid #28a745',
-                      paddingBottom: '4px'
-                    }}>
-                      🔧 Fix Suggestions & Tips
-                    </h4>
-                    <div style={{ 
-                      padding: 8, 
-                      backgroundColor: '#d1ecf1', 
-                      border: '1px solid #bee5eb',
-                      borderRadius: 4,
-                      whiteSpace: 'pre-wrap', 
-                      fontSize: '14px' 
-                    }}>
-                      {file.fixSuggestions}
-                    </div>
-                  </div>
-                )}
-
-                {/* Loading Indicators */}
-                {analyzingFiles[`${index}-codeQuality`] && (
-                  <div style={{ 
-                    padding: 8, 
-                    backgroundColor: '#e3f2fd', 
-                    border: '1px solid #bbdefb',
-                    borderRadius: 4,
-                    fontSize: '14px',
-                    color: '#1976d2'
-                  }}>
-                    🔄 Analyzing code quality...
-                  </div>
-                )}
-
-                {analyzingFiles[`${index}-security`] && (
-                  <div style={{ 
-                    padding: 8, 
-                    backgroundColor: '#e3f2fd', 
-                    border: '1px solid #bbdefb',
-                    borderRadius: 4,
-                    fontSize: '14px',
-                    color: '#1976d2'
-                  }}>
-                    🔄 Analyzing security vulnerabilities...
-                  </div>
-                )}
-
-                {analyzingFiles[`${index}-fixSuggestions`] && (
-                  <div style={{ 
-                    padding: 8, 
-                    backgroundColor: '#e3f2fd', 
-                    border: '1px solid #bbdefb',
-                    borderRadius: 4,
-                    fontSize: '14px',
-                    color: '#1976d2'
-                  }}>
-                    🔄 Generating fix suggestions...
-                  </div>
-                )}
+                <strong>🐛 Bugs & Code Quality Issues:</strong>
+                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
+                  {file.analysis}
+                </div>
+              </div>
+            )}
+            
+            {file.securityAnalysis && (
+              <div style={{ 
+                marginBottom: 8, 
+                padding: 8, 
+                backgroundColor: '#f8d7da', 
+                border: '1px solid #f5c6cb',
+                borderRadius: 4
+              }}>
+                <strong>🔒 Security Issues:</strong>
+                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '14px' }}>
+                  {file.securityAnalysis}
+                </div>
               </div>
             )}
             
@@ -755,16 +532,26 @@ function App() {
           <strong>Created:</strong> {d.created_at ? new Date(d.created_at).toLocaleString() : 'N/A'}
           {d.updated_at ? ` • Updated: ${new Date(d.updated_at).toLocaleString()}` : ''}
         </div>
-        
-        {/* File Changes Section */}
-        {fileData && (
-          <div style={{ marginTop: 16, borderTop: '2px solid #e1e4e8', paddingTop: 16 }}>
-            {renderFileChanges(fileData.files)}
+
+        <nav className="mt-6 px-4">
+          <div className="space-y-2">
+            {navigation.map((item) => (
+              <motion.button
+                key={item.name}
+                onClick={item.action}
+                className="flex items-center gap-3 px-3 py-2 text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded-lg transition-colors w-full text-left"
+                whileHover={prefersReducedMotion ? {} : { x: 4 }}
+                transition={{ type: 'spring', stiffness: 300 }}
+              >
+                {item.icon}
+                {item.name}
+              </motion.button>
+            ))}
           </div>
         )}
         
         {/* Export Buttons */}
-        {fileData && (fileData.files.some(f => f.analysis || f.securityAnalysis || f.fixSuggestions)) && (
+        {fileData && (fileData.files.some(f => f.analysis || f.securityAnalysis)) && (
           <div style={{ 
             marginTop: 16, 
             borderTop: '2px solid #e1e4e8', 
@@ -807,47 +594,57 @@ function App() {
           <div style={{ whiteSpace: 'pre-wrap', borderTop: '1px solid #eee', paddingTop: 8, marginTop: 16 }}>
             {d.body}
           </div>
-        ) : null}
-      </div>
-    );
-  };
+        </header>
 
-  return (
-    <div className="app-container">
-      <form onSubmit={handleSubmit} className="input-form" style={{ flexDirection: 'column' }}>
-        <div style={{ display: 'flex', gap: 10, width: '100%' }}>
-          <input
-            type="text"
-            placeholder="Enter GitHub PR URL"
-            value={prUrl}
-            onChange={(e) => setPrUrl(e.target.value)}
-            className="pr-input"
-          />
-          <button type="submit" className="submit-btn" disabled={isLoading}>
-            {isLoading ? 'Fetching…' : 'Submit'}
-          </button>
-        </div>
-        <input
-          type="password"
-          placeholder="Optional: GitHub token (for private repos or higher limits)"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          className="pr-input"
-          style={{ marginTop: 10 }}
-        />
-        <input
-          type="password"
-          placeholder="ChatAnywhere API Key (for AI code analysis)"
-          value={aiApiKey}
-          onChange={(e) => setAiApiKey(e.target.value)}
-          className="pr-input"
-          style={{ marginTop: 10 }}
-        />
-      </form>
-      <div className="result-area">
-        {renderResult()}
+        {/* Page content */}
+        <main className="flex-1">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={window.location.pathname}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              {children}
+            </motion.div>
+          </AnimatePresence>
+        </main>
       </div>
+
+      {/* Command Palette */}
+      <CommandPalette />
+
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <motion.div
+          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Router>
+        <AppShell>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/pr" element={<PullRequest />} />
+            <Route path="/pr/:id" element={<PullRequest />} />
+            <Route path="/security" element={<Security />} />
+            <Route path="/performance" element={<Performance />} />
+                         <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </AppShell>
+      </Router>
+    </QueryClientProvider>
   );
 }
 
